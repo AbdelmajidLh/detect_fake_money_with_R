@@ -1,0 +1,859 @@
+
+---
+title: "Détection de faux billets avec R"
+author: "Abdelmajid EL HOU - data analyst (*[Mon ePortfolio](https://abdelmajidlh.github.io/ePortfolio/)*) "
+date: "02/02/2022"
+output: 
+  html_document:
+    toc: true # table of content true
+    toc_depth: 3  # upto three depths of headings (specified by #, ## and ###)
+    number_sections: true  ## if you want number sections at each table header
+    theme: united  # many options for theme, this one is my favorite.
+    highlight: tango  # specifies the syntax highlighting style
+    #css: my.css   # you can add your custom css, should be in same folder
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, echo=FALSE, out.width="80%", fig.cap=""}
+#knitr::include_graphics("data/logo.png")
+```
+
+# Introduction
+## Contexte du projet 
+L’Organisation nationale de lutte contre le faux-monnayage, ou ONCFM, est une organisation publique ayant pour objectif de mettre en place des méthodes d’identification des contrefaçons des billets en euros. Dans le cadre de cette lutte, l'ONCFM souhaite mettre en place un algorithme qui soit capable de différencier automatiquement les vrais des faux billets.
+
+## Objectif
+Lorsqu’un billet arrive, une machine consigne l’ensemble de ses caractéristiques géométriques. Au travers des années de lutte, l'ONCFM a observé des différences de dimensions entre les vrais et les faux billets. Ces différences sont difficilement notables à l’œil nu, mais une machine devrait sans problème arriver à les différencier. 
+Ainsi, il faudrait construire un **algorithme** qui, à partir des caractéristiques géométriques d’un billet, serait capable de définir si ce dernier est un vrai ou un faux billet.
+
+## Cométences à mobiliser
+Les compétences à acquérir dans ce projet:
+
+- Réaliser une analyse prédictive
+- Opérer des classifications automatiques pour partitionner les données
+- Réaliser une régression logistique
+- Réaliser une régression linéaire
+
+# Importation et nettoyage des données
+```{r}
+# Définir le dossier de travail
+setwd("C:/Users/abdel/Desktop/Projet 10/P10_Abdelmajid_EL_HOU")
+```
+
+## Packages et fonctions
+```{r}
+suppressMessages(require(tidyverse)) # pour la manipulation et la visualisation des données
+suppressMessages(require(DataExplorer))
+suppressMessages(require(e1071))
+suppressMessages(require(caret)) # regression logistique
+suppressMessages(require(caTools))
+#suppressMessages(require(InformationValue))
+suppressMessages(require(missMDA)) # offre des fonctions R facilitant l'imputation des données manquantes
+suppressMessages(require(ggplot2))
+suppressMessages(require(corrplot))
+suppressMessages(require(purrr))
+suppressMessages(require(hrbrthemes))
+suppressMessages(require(visdat))
+suppressMessages(require(knitr))
+
+# tester la normalité & variances
+suppressMessages(require(ggpubr)) # pour créer facilement des graphiques prêts à la publication
+suppressMessages(require(rstatix)) # offre des fonctions R facilitant les analyses statistiques
+#suppressMessages(require(car)) # tests statistiques
+
+#clustering
+suppressMessages(require(FactoMineR))
+suppressMessages(require(FactoInvestigate))
+suppressMessages(require(factoextra))
+suppressMessages(require(cluster))
+suppressMessages(require(gridExtra))
+suppressMessages(require(DataExplorer))
+```
+## Préparation des données
+```{r}
+# importer le fichier csv
+df =  read.csv2("data/billets.csv", sep = ";") # encoding = "UTF-8"
+```
+
+```{r}
+# Convertir les chaînes de caractères en numeric dans notre jeu de données
+i = c(2,3,4,5,6,7)
+
+df[ , i] <- apply(df[ , i], 2,
+                    function(x) as.numeric(as.character(x)))
+
+```
+
+```{r}
+# Afficher les premières lignes
+kable(df[1:5,], caption = "Head dataframe")
+```
+
+```{r}
+# Taille de mon jeu de données
+dim(df)
+
+# nombre de faux/vrai billets
+table(df$is_genuine)
+```
+
+- Le jeu de données est composé de 1500 observations (1000 vrais billets et 500 faux) et de 7 variables (1 catégorielle et 6 numériques).
+
+```{r}
+# Ajouter une colonne ID
+df <- tibble::rowid_to_column(df, "ID")
+```
+
+## Gérer les valeurs manquantes
+ 
+### Visualisation des valeurs manquantes
+
+```{r}
+vis_miss(df) + theme(axis.text.x =  element_text(angle = 90))
+```
+
+- Nous avons au total 37 valeurs manquantes (0.3 % du total).
+- Ces valeurs manquantes sont situées au niveau de la colonne margin_low (2.47 %).
+
+```{r}
+# Créer un nouveau jeu de données sans valeurs manquantes
+df2 = df %>% filter(!is.na(margin_low))
+```
+
+### Imputation des valeurs manquantes par regression linéaire
+
+La régression linéaire multiple est une extension de la régression linéaire simple utilisée pour prédire une variable de résultat (y) sur la base de multiples variables prédictives distinctes (x).
+
+Par exemple, avec trois variables prédictives (*x*), la prédiction de *y* est exprimée par l'équation suivante :
+
+$$y = b0 + b1*x1 + b2*x2 + b3*x3$$
+* Les valeurs *b* sont appelées les poids de régression (ou coefficients bêta).
+* Elles mesurent l'association entre la variable prédictive et le résultat.
+* *b_j* peut être interprété comme l'effet moyen sur *y* d'une augmentation d'une unité de *x_j*, en maintenant tous les autres prédicteurs fixes.
+
+#### Construire le modèle
+Nous voulons construire un modèle d'estimation de la variable *margin_low* basé sur les autres variables numériques, comme suit :
+$$margin\_low = b0 + b1*diagonal + b2*height\_left + b3*height\_right + b4*margin\_up + b5*length$$
+
+```{r}
+# Calculer les coefficients du modèle
+model <- lm(margin_low ~ diagonal + height_left + height_right + margin_up + length, data = df2)
+summary(model)
+```
+
+#### Interprétation
+* La valeur *p* de la statistique F est < 2.2e-16, ce qui est hautement significatif. Cela signifie qu'au moins une des variables prédictives est liée de manière significative à la variable de résultat.
+
+* Pour voir quelles variables prédictives sont significatives, on peux examiner le tableau des coefficients, qui montre l'estimation des coefficients bêta de la régression et les valeurs t-statistiques *p* associées :
+
+
+```{r}
+summary(model)$coefficient
+```
+
+Pour un prédicteur donné, la statistique $t$ évalue s'il existe ou non une *association significative* entre le *prédicteur* et la variable de *résultat*, c'est-à-dire si le coefficient *bêta* du prédicteur est significativement différent de zéro.
+
+- On constate que les 5 variables géometriques sont significativement associées à la variation de la variable $margin\_low$.
+
+- Pour une variable prédictive donnée, le coefficient (*b*) peut être interprété comme l'effet moyen sur $y$ d'une augmentation d'une unité de la variable prédictive, toutes les autres variables prédictives étant fixes.
+
+- Enfin, l'équation de notre modèle peut être écrite comme suit :
+$$margin\_low = 22.99 - 0.11*diagonal + 0.18*height\_left + 0.26*height\_right + 0.26*margin\_up - 0.41*length$$
+
+L'intervalle de confiance du coefficient du modèle :
+
+```{r}
+confint(model)
+```
+#### Évaluation de la précision du modèle
+La qualité globale du modèle peut être évaluée en examinant le R-carré ($R^2$) et l'erreur standard résiduelle (*RSE*).
+
+##### R-carré
+- Dans la régression linéaire multiple, le $R^2$ représente le **coefficient de corrélation** entre les valeurs observées de la variable de résultat ($y$) et les valeurs ajustées (c'est-à-dire prédites) de $y$. Pour cette raison, la valeur de $R$ sera toujours positive et sera comprise entre 0 et 1.
+
+
+- $R^2$ représente la proportion de la variance, dans la variable de résultat $y$, qui peut être prédite en connaissant la valeur des variables $x$. Une valeur $R^2$ proche de 1 indique que le modèle explique une grande partie de la variance de la variable de résultat.
+
+Un problème avec le $R^2$, est qu'il augmentera toujours lorsque plus de variables sont ajoutées au modèle, même si ces variables ne sont que faiblement associées à la réponse (James et al. 2014). Une solution consiste à ajuster le $R^2$ en tenant compte du nombre de variables prédictives.
+
+L'ajustement de la valeur du "R carré ajusté" dans la sortie du résumé est une correction pour le nombre de variables *x* incluses dans le modèle de prédiction.
+
+**_Dans notre exemple, avec les 5 variables prédictives, le $R^2$ ajusté = 0,475, ce qui signifie que 47.5% de la variance de margin_low peut être prédite par les 5 variables._**
+
+##### Residual Standard Error (RSE), ou sigma:
+L'estimation $RSE$ donne une mesure de l'erreur de prédiction. Plus le RSE est faible, plus le modèle est précis (sur les données en question).
+
+Le taux d'erreur peut être estimé en divisant $RSE$ par la variable de résultat moyenne :
+
+```{r}
+sigma(model)/mean(df2$margin_low)
+```
+- la valeur est proche de 0, donc *notre modèle semble être précis à 90 %*.
+
+##### Détection de la multicollinéarité entre variables
+* Dans la régression multiple, deux variables prédictives ou plus peuvent être corrélées entre elles.  Cette situation est appelée **colinéarité**.
+
+* Il existe une situation extrême, appelée **multicollinéarité**, où la colinéarité existe entre trois variables ou plus, même si aucune paire de variables ne présente une corrélation particulièrement élevée. Cela signifie qu'il existe une **redondance entre les variables prédictives**.
+
+* En présence de multicollinéarité, la solution du modèle de régression devient instable.
+
+* Pour un prédicteur donné ($p$), la multicollinéarité peut être évaluée en calculant un score appelé **facteur d'inflation de la variance** (ou *VIF*), qui mesure **à quel point la variance d'un coefficient de régression est gonflée en raison de la multicollinéarité du modèle**.
+
+Face à la multicollinéarité, **les variables concernées doivent être supprimées**, car la présence de la multicollinéarité implique que l'information que cette variable fournit sur la réponse est **redondante** en présence des autres variables (James et al. 2014,P. Bruce et Bruce (2017)). [Source](http://www.sthda.com/english/articles/39-regression-model-diagnostics/160-multicollinearity-essentials-and-vif-in-r/)
+
+```{r}
+# Detecter la multicolinéarité
+car::vif(model)
+```
+- Les scores des 5 variables sont proche de 1, donc aucune multi-colinéarité n'est présente entre les variables.
+
+#### Remplacer les valeurs manquantes dans le fichier original en appliquant le modèle
+```{r}
+# Utiliser le modèle pour prédire la valeur de margin_low
+df3 <- df %>% 
+  mutate(pred = predict(model, .)) %>%
+  mutate(margin_low = ifelse(is.na(margin_low), pred, margin_low))
+
+# Voir le résultat
+df3 = df3 %>% select(ID, is_genuine, diagonal, height_left, height_right, margin_low, margin_up, length) %>% as.data.frame()
+
+vis_miss(df3[,-1]) + theme(axis.text.x =  element_text(angle = 90))
+```
+
+- Les valeurs manquantes sont bien imputées..
+
+# Analyse exploratoire des données
+## Description des données
+
+```{r}
+# Calcul de la moyenne par catégorie de billet
+for (col in 3:ncol(df3)) {
+    print(paste0("------",colnames(df3)[col], "------"),collapse ="\t")
+    moy = tapply(df3[,col], df3[,2], mean)
+    print(moy)
+}
+```
+
+*Un portrait-robot d'un vrai billet :* 
+
+- Diagonale : 171.98 mm.
+- Hauteur mesurée à gauche : 103.94 mm
+- Hauteur mesurée à droite : 103.80 mm,
+- Marge entre le bord inférieur et le bord de l'image : 4.11 mm
+- Marge entre le bord supérieur et le bord de l'image :3.05 mm,
+- Longueur : 113.20 mm, 
+
+## Distribution des variables
+### Test de Normalité
+Les tests de corrélation, de régression, les tests t et l’analyse de variance, supposent que les données suivent une distribution normale. Ces tests sont appelés tests paramétriques, car leur validité dépend de la distribution des données.
+
+Vérifier la normalité des données dans R par inspection visuelle (graphique QQ plot et distributions de densité) et par des tests de statistiques (test de Shapiro-Wilk) [source](https://www.datanovia.com/en/fr/lessons/test-de-normalite-dans-r/)
+
+#### Visuellement
+
+```{r}
+#plot_histogram(data =df3, ggtheme = theme_classic())
+par(mfrow=c(2,3))
+for (col in 3:ncol(df3)) {
+    mean <- mean(df3[,col])
+    med  <- median(df3[,col])
+    hist(df3[,col], col="lightblue", main = "", freq=FALSE, xlab = colnames(df3)[col])
+    abline(v = mean, col = 'black', lwd = 2)
+    abline(v = med, col = 'red', lwd = 2)
+    text(mean, 0.5, "mean", col="black", srt=90,pos=1)
+    text(med, 0.6, "median", col="red", srt=90,pos=1)
+}
+
+```
+
+
+```{r, fig.height=8}
+# QQ plot
+qq_diagonal     = ggqqplot(data =df3$diagonal)
+qq_height_left  = ggqqplot(data =df3$height_left)
+qq_height_right = ggqqplot(data =df3$height_right)
+qq_margin_low   = ggqqplot(data =df3$margin_low)
+qq_margin_up    = ggqqplot(data =df3$margin_up)
+qq_length       = ggqqplot(data =df3$length)
+
+ggarrange(qq_diagonal, qq_height_left, qq_height_right, qq_margin_low, qq_margin_up, qq_length + rremove("x.text"), 
+          labels = c("diagonal", "height_left", "height_right", "margin_low", "margin_up","length"),
+          ncol = 2, nrow = 3)
+```
+
+- La distribution des variables semble etre normale, sauf pour $margin\_low$ et $length$
+
+#### Test de normalité de Shapiro-Wilk
+Il existe plusieurs méthodes pour évaluer la normalité, notamment le test de normalité de **Kolmogorov-Smirnov (K-S)** ($n > = 5000$ ) et le test de **Shapiro-Wilk**.
+
+- L’hypothèse nulle de ces tests est que “la distribution de l’échantillon est normale”. Si le test est significatif, la distribution est non-normale.
+- La méthode de Shapiro-Wilk est largement recommandée pour les tests de normalité et fournit une meilleure puissance que K-S. Il est basé sur la corrélation entre les données et les scores normaux correspondants (Ghasemi and Zahediasl 2012).
+
+```{r, warning=FALSE}
+# Test de Shapiro 
+df3 %>% shapiro_test(diagonal, height_left, height_right, margin_low, margin_up, length)
+```
+
+- La p-value > 0,05 indiquant que la distribution des données n’est pas significativement différente de la distribution normale. En d’autres termes, nous pouvons supposer la normalité.
+- Le test de shapiro indique que la distribution des variables $length$, $margin\_low$ et $margin\_up$ n'est pas significativement normale.
+
+```{r}
+# afficher les box plots
+plot_boxplot(df3[,-1], "is_genuine", geom_boxplot_args = list(notch=TRUE), ggtheme = theme_classic())
+```
+
+Les box plots par catégorie de billet montrent que les médianes des deux groupes sont significativement différentes:
+
+- valeurs plus fortes de la variable $length$ pour les vrais billets
+- valeurs plus bas pour $margin\_low$ et $margin\_up$
+- valeurs légèrement plus bas pour $height\_left$ et $height\_right$
+- valeur légèrement plus fort pour $diagonal$
+
+### Test d’Homogénéité des Variances - hétéroscédasticité
+Certains tests statistiques, comme le test T sur deux échantillons indépendants et le test ANOVA, supposent que les variances sont égales entre les groupes.
+
+Il existe différents tests de variance qui peuvent être utilisés pour évaluer l’**égalité des variances**. Il s’agit notamment:
+
+    - Test F : Comparez les variances de deux groupes. Les données doivent être normalement distribuées.
+    - Test de Bartlett : Comparer les variances de deux groupes ou plus. Les données doivent être normalement distribuées.
+    - Le test de Levene : Une alternative robuste au test de Bartlett qui est moins sensible aux écarts de normalité.
+    - Test de Fligner-Killeen : un test non paramétrique qui est très robuste contre les écarts de normalité.
+
+⚠️ <span style="color:blue">*Il est à noter que le test de Levene est le plus couramment utilisé dans la littérature.* </span>. [Source](https://www.datanovia.com/en/fr/lessons/test-dhomogeneite-des-variances-dans-r/)
+
+Hypothèses statistiques :
+
+ * H0 : toutes les variances des echantillons sont égales
+ * H1 : au moins deux d'entre elles diffèrent.
+ 
+Par conséquent, des valeurs $p$ inférieures à 0,05 suggèrent que les variances sont significativement différentes et que l'hypothèse d'homogénéité de la variance a été violée.
+
+```{r}
+# # Test de Levene avec de multiples variables indépendantes. La fonction leveneTest() [package car] peut être utilisée.
+for (col in 3:ncol(df3)) {
+  res = car::leveneTest(df3[,col] ~ as.factor(is_genuine), df3)
+  print(colnames(df[col]))
+  print(res)
+  print("------------------------------------------------")
+}
+```
+
+- L'hypothèse d'homogénéité de la variance a été violée pour les variables $height\_left$, $margin\_low$, et $length$.
+
+
+### Identifier les corrélations entre les variables du dataframe
+[Source : ](https://jkzorz.github.io/2019/06/11/Correlation-heatmaps.html)
+
+```{r, fig.height=5, fig.width=5}
+# Crééer une matrice de crrélation
+cc = cor(select_if(df3[,-1], is.numeric), method = "spearman")
+
+# Heatmap
+#corrplot(cc, tl.col = "black", addrect = 4, tl.cex = 0.7)
+plot_correlation(cc, ggtheme = theme_classic())
+```
+
+- La variable $length$ est corrélée fortement avec les variables $margines$ (corrélation négative)
+- $margin\_up$ et $margin\_low$ sont très corrélées positivement.
+
+# Modèle : Classification automatique avec kmeans
+L’objectif est d’identifier des groupes homogènes, partageant des caractéristiques similaires (séparer les vrai et les faux billets en se basant sur les données géométriques).
+
+
+
+```{r, fig.height=8, fig.width=8}
+#df3 = df3[,-8]
+# Centrage réduction des données : pour éviter que les variables à forte variance pèsent indûment sur les résultats
+data.cr = scale(df3[,c(-1,-2)], center=T, scale=T)
+data.cr = data.cr %>% as.data.frame()
+#rownames(data.cr) = seq(1:nrow(df3))
+#data.cr = tibble::rowid_to_column(as.data.frame(data.cr), "ID")
+data.cr$is_genuine = df3$is_genuine
+data.cr$ID = df3$ID
+```
+
+## Nombre adéquat de groupes
+
+```{r, fig.height=5, fig.width=6}
+# Identifier le nombre de centres optimals
+grid.arrange(
+fviz_nbclust(data.cr[c(-7,-8)], FUNcluster = kmeans, method = "wss"),
+fviz_nbclust(data.cr[c(-7,-8)], FUNcluster = kmeans, method = "silhouette")
+    ,nrow=1 )
+```
+
+* Le "coude" suggère que 2 groupes préservent l'information semblerait le nombre optimal
+
+
+```{r}
+# Kmeans avec les données centrées et réduites
+#   center = 2 nombre de groupes demandés
+#   nstart = 50 nombre d'essais avec différents individus de départ parce que les résultats sont dépendants de l’initialisation
+# Set seed
+set.seed(1234)
+groupes.kmeans = kmeans(data.cr[c(-7,-8)], centers=2, nstart=50)
+```
+
+```{r, fig.height=7, fig.width=7, warning=FALSE}
+# visualisation des clusters obtenus (projection sur le 1er plan factoriel) des deux méthodes
+fviz_cluster(groupes.kmeans, data = data.cr[c(-7,-8)], main = "Kmeans 2", repel = TRUE, geom = c("point"), elipse.type = "euclid", ggtheme = theme_classic())
+```
+```{r}
+#affichage des résultats - centroides 
+print(groupes.kmeans$centers)
+```
+
+* K-means clustering avec 2 clusters de taille 1004 et 496
+
+
+```{r, warning=FALSE}
+kmeans_basic_table <- data.frame(groupes.kmeans$size, groupes.kmeans$centers)
+kmeans_basic_df <- data.frame(Cluster = groupes.kmeans$cluster, df3)
+```
+
+
+```{r}
+# ggplot nombre de billets par cluster
+ggplot(data = kmeans_basic_df, aes(y = Cluster)) +
+  geom_bar(aes(fill = is_genuine)) +
+  ggtitle("Nombre de faux/vrai billets par Cluster") +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+* Le premier cluster représente les vrai billets et le deuxième, les faux billets
+
+```{r}
+# Matrice de confusion
+table(df3$is_genuine, kmeans_basic_df$Cluster)
+```
+- Le modèle kmeans avec 2 centres représente efficacement les deux types de billets dans notre jeu de données
+- La précision (accuracy) du modèle : (990+486)/1500 = **98.4 %**
+
+
+
+# Modèle : Régression Logistique
+* La régression logistique est utilisée pour prédire la classe (ou catégorie) d'individus en fonction d'une ou plusieurs variables prédictives (x). Elle est utilisée pour modéliser un résultat binaire, c'est-à-dire une variable qui ne peut avoir que deux valeurs possibles (ex. 0/1, oui/non, malade/non malade , **vrai**/**faux**).
+
+* La régression logistique appartient à une famille, appelée modèle linéaire généralisé (GLM), développée pour étendre le modèle de régression linéaire à d'autres situations. D'autres synonymes sont la **régression logistique binaire**, la **régression logistique binomiale** et le **modèle logit** ([Source](http://www.sthda.com/english/articles/36-classification-methods-essentials/151-logistic-regression-essentials-in-r/)).
+
+* La régression logistique ne renvoie pas directement la classe des observations. Elle nous permet d'estimer la **probabilité (p)** d'appartenance à une classe. La probabilité sera comprise entre **0** et **1**. Il faudra donc, décider de la probabilité seuil à partir de laquelle la catégorie bascule de l'une à l'autre. Par défaut, cette valeur est fixée à $p = 0,5$, mais en réalité, elle doit être fixée en fonction de l'objectif de l'analyse.
+
+Dans cette partie, on va :
+
+    - Définir l'équation de régression logistique et les termes clés tels que log-odds et logit.
+    - effectuer une régression logistique dans R et interpréter les résultats
+    - faire des prédictions sur de nouvelles données de test et évaluer la précision du modèle.
+    
+## Préparation des données
+La régression logistique fonctionne pour des données qui contiennent des variables prédicteurs continues et/ou catégoriques.
+
+L'exécution des étapes suivantes peut améliorer la précision de notre modèle :
+
+    - Supprimez les valeurs aberrantes potentielles
+    - Utiliser les variables prédicteurs normalement distribuées (ou faire la transformation logarithmique, racine ou box-cox, si ce n'est pas le cas).
+    - Supprimez les variables prédicteurs fortement corrélées pour minimiser l'overfitting (La présence de prédicteurs fortement corrélés peut conduire à une solution instable du modèle).
+    
+```{r}
+# Inspecter les données
+kable(df3[1:5,], caption = "Mon jeu de données")
+```
+
+## Calcul de la régression logistique
+Commençant par utilier l'ensemble des variables.
+
+* Pour des données binaires ou binomiales, la fonction lien est nommée le logit (ce que l’on indique à glm avec l’argument family=binomial(logit) : 
+$$g(p) = log(p/1-p)$$. 
+* La fonction logit est le logarithme de la probabilité $(p1−p)$ ([source: qcbs, p54](http://r.qcbs.ca/workshop06/pres-fr/workshop06-pres-fr.html#54))
+
+```{r}
+# Modele logit
+reg <- glm(as.factor(is_genuine) ~ diagonal + height_left + height_right + margin_low + margin_up + length, 
+           data = df3, family = binomial(link = "logit"))
+# model <- glm( is_genuine ~., data = train.data, family = binomial) # toutes les vars inclues
+summary(reg)
+
+```
+
+- les  prédicteurs significatifs sont : $height\_right$, $margin\_low$, $margin\_up$ et $length$
+
+Notant que les fonctions coef() et summary() peuvent être utilisées pour extraire uniquement les coefficients, comme suit :
+
+```{r}
+summary(reg)$coef
+```
+
+
+- Dans le cadre d’un modèle logistique, généralement on ne présente pas les coefficients du modèle mais **leur valeur exponentielle**, cette dernière correspondant en effet à des **odds ratio**, également appelés **rapports des cotes**. 
+- L’odds ratio diffère du risque relatif. Cependent son interprétation est similaire. 
+- Un odds ratio de **1** signifie l’**absence d’effet**. Un odds ratio largement **supérieur à 1** correspond à une **augmentation du phénomène étudié** et un odds ratio largement **inféieur à 1** correspond à une **diminution du phénomène étudié**([source](https://larmarange.github.io/analyse-R/regression-logistique.html#pr%C3%A9paration-des-donn%C3%A9es)).
+
+
+## Interpretation
+On constate que seuls 4 des 6 prédicteurs sont associés de manière significative au résultat.
+
+Le coefficient estimé de la variable length est $b = 5.91$ (positif). Cela signifie qu'une augmentation du $length$ est associée à une augmentation de la probabilité d'être faut billet. Cependant, le coefficient de la variable $margin\_low$ est $b = -5.77$ (négatif). Cela signifie qu'une augmentation de la $margin\_low$ est associée à une diminution de la probabilité d'être faux billet.
+
+
+D'après les résultats de la régression logistique, on peut remarquer que certaines variables ne sont pas statistiquement significatives. Leur maintien dans le modèle peut contribuer à un ajustement excessif (**overfiting**). Elles doivent donc être éliminées. Ceci peut être fait automatiquement en utilisant des techniques statistiques, y compris les méthodes de régression pas à pas (**stepwise regression**) et de régression pénalisée (**penalized regression**). En bref, elles consistent à sélectionner un modèle optimal avec un ensemble réduit de variables, sans compromettre la précision du modèle.
+
+## Représentation graphique du modèle
+Il est possible de représenter graphiquement les différents odds ratios avec la fonction ggcoef_model de GGally.
+
+```{r, message=FALSE, warning=FALSE}
+library(GGally)
+ggcoef_model(reg, exponentiate = TRUE)
+```
+
+## Représentation graphique des effets
+L’extension effects propose une représentation graphique résumant les effets de chaque variable du modèle.
+
+```{r, fig.height=6, fig.width=8, message=FALSE, warning=FALSE}
+library(effects)
+plot(allEffects(reg))
+```
+
+## Matrice de confusion
+Une manière de tester la qualité d’un modèle est le calcul d’une matrice de confusion, c’est-à-dire le tableau croisé des valeurs observées et celles des valeurs prédites en appliquant le modèle aux données d’origine.
+
+La méthode predict avec l’argument type="response" permet d’appliquer notre modèle logistique à un tableau de données et renvoie pour chaque individu la probabilité qu’il ait vécu le phénomène étudié (un vrai billet).
+
+```{r}
+billet.pred <- predict(reg, type = "response", newdata = df3)
+head(billet.pred, n = 10)
+```
+Or notre variable étudiée est de type binaire. Nous devons donc transformer nos probabilités prédites en une variable du type « vrai / faux ». Usuellement, les probabilités prédites seront réunies en deux groupes selon qu’elles soient supérieures ou inférieures à la moitié. La matrice de confusion est alors égale à :
+
+```{r}
+table(billet.pred > 0.5, df3$is_genuine)
+```
+
+```{r}
+accuracy<- (491+996)/ (491+4+9+996)
+print(accuracy)
+```
+⚠️ * Nous avons donc 13 (4+9) prédictions incorrectes sur un total de 1500, soit un taux de mauvais classement de 0.87 %.
+⚠️ * La précision (accuracy) du modèle est de 99.13%
+
+
+## Identifier les variables ayant un effet significatif
+Les $p-values$ associées aux odds ratios nous indique si un odd ratio est significativement différent de 1, par rapport à la modalité de référence. Mais cela n’indique pas si globalement une variable a un effet significatif sur le modèle. Pour tester l’effet global sur un modèle, on peut avoir recours à la fonction drop1. Cette dernière va tour à tour supprimer chaque variable du modèle et réaliser une analyse de variance (ANOVA) pour voir si la variance change significativement ou d'appliquer une ANOVA diréctement.
+
+```{r}
+#drop1(reg, test = "Chisq")
+Anova(reg)
+```
+
+La suppression des variables $diagonal$ et $height\_left$ ne modifient significativement pas le modèle, indiquant l’absence d’effet de ces variables.
+
+## Sélection de modèles
+Il est toujours tentant lorsque l’on recherche les facteurs associés à un phénomène d’inclure un nombre important de variables explicatives potentielles dans un modèle logistique. Cependant, un tel modèle n’est pas forcément le plus efficace et certaines variables n’auront probablement pas d’effet significatif sur la variable d’intérêt.
+
+La technique de sélection descendante pas à pas est une approche visant à améliorer son modèle explicatif. On réalise un premier modèle avec toutes les variables spécifiées, puis on regarde s’il est possible d’améliorer le modèle en supprimant une des variables du modèle. Si plusieurs variables permettent d’améliorer le modèle, on supprimera la variable dont la suppression améliorera le plus le modèle. Puis on recommence le même procédé pour voir si la suppression d’une seconde variable peut encore améliorer le modèle et ainsi de suite. Lorsque le modèle ne peut plus être améliorer par la suppresion d’une variable, on s’arrête.
+
+Il faut également définir un critère pour déterminer la qualité d’un modèle. L’un des plus utilisés est le *Akaike Information Criterion* ou *AIC*. **Plus l’AIC sera faible, meilleure sera le modèle**.
+
+La fonction **step** permet justement de sélectionner le **meilleur modèle par une procédure pas à pas descendante basée sur la minimisation de l’AIC**. La fonction affiche les différentes étapes de la sélection et renvoie le modèle final.
+
+```{r}
+reg2 <- step(reg)
+```
+
+* Le modèle initial a un AIC de 98.68. À la première étape, il apparait que la suppression de la variable *diagonal* permet de diminuer l’AIC à 96.69. Lors de la seconde étape, toute suppression d’une autre variable ferait augmenter l’AIC. La procédure s’arrête donc.
+
+Pour obtenir directement l’AIC d’un modèle donné, on peut utiliser la fonction AIC.
+```{r}
+AIC(reg)
+AIC(reg2)
+```
+Effectuer une analyse de variance ou ANOVA pour comparer les deux modèles :
+```{r}
+anova(reg, reg2, test = "Chisq")
+```
+
+- Il n’y a pas de différences significatives entre nos deux modèles (notre second modèle explique tout autant de variance que notre premier modèle, tout en étant plus parcimonieux).
+
+## Mise à jour du modèle
+On supprime les variables non significatifs ($height\_left$ et $diagonal$) du modèle et on recalcul les coefficients.
+
+```{r}
+reg3 <- update(reg, ~. - height_left - diagonal)
+summary(reg3)
+```
+
+
+```{r}
+# Performance du modèle mis à jour
+billet.pred <- predict(reg3, type = "response", newdata = df3)
+table(billet.pred > 0.5, df3$is_genuine)
+```
+
+
+```{r}
+accuracy<- (492+997)/ (492+3+8+997)
+print(accuracy)
+```
+🔴 On observe une legère amélioration du modèle (99.26% au lieu de 99.13%).
+
+
+## Tester le modèle sur des données divisées (training/test)
+Les performances des deux modèles (logit et step) sont égales sur le jeu de données complet. Testant le modèle sur un jeu de données training et test.
+
+```{r}
+# Split le dataframe en train/test
+set.seed(5)
+split = sample.split(df3$is_genuine)
+train.data = subset(df3, split==TRUE)
+test.data = subset(df3, split==FALSE)
+```
+
+### Performances des modèles
+#### Modèle logit
+```{r}
+# Entrainer le modèle logit sur le jeu de données train
+reg4_logit = glm(as.factor(is_genuine) ~ height_right + margin_low + margin_up + length, 
+           data = train.data, family = binomial(link = "logit"))
+
+# Performance du modèle sur le jeu test
+reg4_pred_logit_test = predict(reg4_logit, type = "response", newdata = test.data)
+
+#caret::confusionMatrix(table(reg4_pred_test > 0.5, test.data$is_genuine))
+table(reg4_pred_logit_test > 0.5, test.data$is_genuine)
+```
+
+🔴 * Nous avons seulement 5 prédictions incorrectes sur un total de 500, soit un taux de mauvais classement de 1 %.
+
+🔴 * L'accuracy du modèle est de 99 %
+
+#### Modèle step
+```{r}
+# Entrainer le modèle "step" sur le jeu de données train
+reg4_step = step(reg4_logit)
+
+# Performance du modèle "step" sur le jeu de données test
+reg4_pred_step_test <- predict(reg4_step, type = "response", newdata = test.data)
+table(reg4_pred_step_test >0.5, test.data$is_genuine)
+```
+
+🔴 Les deux modèles ont la même performance (accuracy de 99%)
+
+
+#### Courbe ROC 
+Receiver Operating Characteristic Curve (ROCR). On peut en générer grâce au package ROCR ([source](http://www.duclert.org/r-apprentissage/courbes-ROC-R.php)).
+
+Spécificité et sensibilité :
+
+    - la sensibilité est : TP / (TP + FN) = TP / P.
+    - la spécificité est : TN / (TN + FP) = TN / N.
+
+avec
+
+    * TP (true positives) : les prédits positifs qui le sont vraiment.
+    * FP (false positives) : les prédits positifs qui sont en fait négatifs.
+    * TN (true negatives) : les prédits négatifs qui le sont vraiment.
+    * FN (false negatives) : les prédits négatifs qui sont en fait positifs.
+    * P (positives) : tous les positifs quelque soit l'état de leur prédiction. P = TP + FN.
+    * N (negatives) : tous les négatifs quelque soit l'état de leur prédiction. N = TN + FP.
+
+```{r}
+# ROCR ored_logit
+library(ROCR)
+rocr_pred = prediction(reg4_pred_logit_test, test.data$is_genuine)
+perf_ROCR = performance(rocr_pred, "auc")
+perf_ROCR@y.values
+```
+```{r}
+# Visualisation graphique
+perf_ROCR = performance(rocr_pred, "tpr", "fpr")
+plot(perf_ROCR, colorize=TRUE)
+```
+
+## Cross validation
+Le package carret (Classification And REgression Training) intègre plusieurs fonctions pour faire du machine learnin (comme sklearn dans Python).
+
+Même si “caret” propose des techniques de rééchantillonnage pour l’évaluation des modèles, nous allons subdiviser les données en échantillons d’apprentissage (70%) et de test (30%). Nous utilisons la commande createDataPartition() de la librairie “caret” ([source](https://www.google.com/url?sa=t&rct=j&q=&esrc=s&source=web&cd=&cad=rja&uact=8&ved=2ahUKEwja7rDAzcn1AhWQMBQKHTwLCi8QFnoECAMQAQ&url=http%3A%2F%2Feric.univ-lyon2.fr%2F~ricco%2Ftanagra%2Ffichiers%2Ffr_Tanagra_package_caret.pdf&usg=AOvVaw0OIWAgbsqD8iEDVrNVxza7)).
+
+
+```{r}
+# Recoder la variable réponse en factor dans le df3
+df3 <- df3 %>%
+  mutate(is_genuine = factor(is_genuine))
+```
+### Echantillonage
+Nous effectuons un échantillonnage stratifié sur la variable cible (is_genuine). Les proportions des classes devraient être respectées dans les sous-échantillons.
+
+```{r}
+# Echantillonnage aléatoire en équilibrant les proportions de billets
+set.seed(100)
+trainIndex <- createDataPartition(df3$is_genuine, p=0.7, list=F)
+print(length(trainIndex))
+```
+
+```{r}
+#data frame pour les individus en apprentissage 
+train = df3[trainIndex,] 
+print(dim(train))
+```
+
+Et pour l’échantillon test, nous passons par l’indiçage négatif qui indique les individus à exclure.
+```{r}
+#data frame pour les individus en test 
+test <- df3[-trainIndex,] 
+print(dim(test))
+```
+Nous vérifions la distribution des classes.
+```{r}
+#fréquences relatives des classes dans l'éch. d'apprentissage 
+print(prop.table(table(train$is_genuine)))
+
+#distribution des classes dans l'éch. test 
+print(prop.table(table(test$is_genuine)))
+```
+### Modèle de regression retenu
+```{r, warning=FALSE}
+#paramètre du processus d'apprentissage - cross validation
+fitControl = trainControl(method = "cv", number = 10)
+
+#apprentissage - régression logistique 
+m_lr <- train(is_genuine ~ height_right + margin_low + margin_up + length, 
+              data = train, method="glm", trControl=fitControl, family = "binomial")
+
+kable(m_lr$results, caption = "Description")
+```
+
+Le modèle sous-jacent est accessible via la propriété $finalModel
+
+```{r}
+print(m_lr$finalModel)
+```
+- l'AIC est beaucoup plus faible par rapport aux enciens modèles (~ 96)
+
+### Prédiction sur l’échantillon test
+Pour évaluer la qualité de notre modèle, nous l’appliquons sur l’échantillon test
+
+```{r}
+#prediction 
+pred = predict(m_lr, newdata=test) 
+
+#distribution des classes prédites 
+print(table(pred))
+```
+🔴 Il y a 302 prédictions positives c.-à-d. 302 billets de l’échantillon test sont désignées vrai billets !
+
+### Matrice de confusion et indicateurs d’évaluation
+La matrice de confusion matérialise la confrontation entre les classes observées et prédites. Des indicateurs (métriques) interprétables en sont déduits [source](http://topepo.github.io/caret/measuring-performance.html#measures-for-predicted-classes).
+
+Nous utilisons la commande confusionMatrix(). Un troisième paramètre permet de désigner la modalité cible, nécessaire pour le calcul de certains indicateurs. Dans notre cas, nous cherchons avant tout à identifier les vrai billets (is_genuine = True).
+
+```{r}
+#matrice de confusion 
+mat = confusionMatrix(data=pred, reference=test$is_genuine, positive="True") 
+print(mat)
+```
+
+- Le taux de succès (accuracy, à ne pas confondre avec la précision) est 99.56%. 
+- L’intervalle de confiance à 95% est fournie. En effet, l’ensemble de test n’est qu’un échantillon représentatif (au mieux) de la population. Les taux mesurés sont assortis d’une certaine incertitude.
+Nous disposons d’autres indicateurs, en particulier la **sensibilité** qui, associée à la classe positive “is_genuine = True”, est égale à 300/(300+0) = 100 %
+
+### Autre méthode d'évaluation du modèle
+#### Courbe LIFT (courbe de gain)
+La courbe LIFT ou courbe de gain est utilisée pour mesurer l’efficacité d’un ciblage ([scoring](http://topepo.github.io/caret/measuring-performance.html#lift-curves)). Nous travaillons toujours sur l’échantillon test. Pour la construire, en sus des classes observées, nous avons besoin de la probabilité (score) d’être de la classe positive fournie par le modèle [P(is_genuine = True / description)].
+
+```{r}
+#score des individus positifs (vrai billets) 
+score = predict(m_lr, test, type="prob")[,"True"]
+```
+Avec l’option “type = prob”, predict() produit pour chaque individu les probabilités d’appartenance aux classes.
+
+Nous créons un data frame regroupant les classes observées et les scores.
+```{r}
+# tableau de données pour le scoring 
+liftdata <- data.frame(classe=test$is_genuine) 
+liftdata$score <- score
+```
+
+Nous faisons appel à la fonction lift() de caret en spécifiant la modalité cible pour le scoring, à savoir “class = True”.
+
+```{r}
+#objet lift 
+lift_obj = lift(classe ~ score, data=liftdata, class="True") 
+print(lift_obj)
+```
+- La fonction print() indique seulement la proportion des observations positives (is_genuine = True).
+
+Pour obtenir la courbe proprement dite, nous appelons la fonction plot() associée à l’objet.
+```{r}
+#affichage de la courbe lift 
+plot(lift_obj)
+```
+
+- La courbe est proche de la limite théorique (atteinte lorsque tous les billets = True se voient attribuer un score plus élevé que les billets = False). Notre ciblage est d’excellente qualité.
+
+#### La Courbe ROC
+La courbe ROC vise à mesurer la qualité d’un modèle en s’affranchissant des coûts de mauvaise affectation et de la représentativité de l’échantillon utilisé (les proportions des classes dans l’échantillon peut être différent de celui de la population).
+
+```{r, warning=FALSE}
+#library 
+library(pROC)
+
+#objet roc 
+roc_obj = roc(test$is_genuine =="True",score)
+
+#plot de l'objet roc 
+plot(1-roc_obj$specificities, roc_obj$sensitivities, type="l", col = "red", xlab ="False positive rate", ylab = "True positive rate" ) 
+abline(0,1)
+```
+
+- Pour maximiser le recall (TP rate: axe des y) (le ratio de faux billets), on choisis un cutoff de 0.8 (p(T) > 0.8).
+
+## Tester le modèle final sur un nouveau jeu de données
+```{r}
+# importer le jeu de données
+new_df = read.csv("data/billets_production.csv", sep = ',')
+#new_df = read.csv("data/test2.csv", sep = ';')
+#new_df = read.csv("data/billets_essai.csv", sep = ',')
+
+# prediction 
+pred_new = predict(m_lr, newdata=new_df) 
+
+#distribution des classes prédites 
+print(table(pred_new))
+
+#score des individus positifs (vrai billets) 
+score2 = predict(m_lr, new_df, type="prob")[,"True"]
+
+# tableau de données pour le scoring 
+liftdata_new <- data.frame(classe=new_df$id) 
+liftdata_new$score <- score2
+
+# Ajouter les prédictions au fichier original
+df4 = new_df %>% mutate(prediction = pred_new, Proba_vrai = score2)
+kable(df4, caption = "Mes résultats")
+```
+
+* Les billets A_1, A_2 et A_3 sont des faux billets (score faible) et es 2 autres sont des vrai billets avec une forte probabilité
+
+
+# Implémenter le modèle de régression logistique avec shiny
+Construire un outil qui prend comme entrée un fichier CSV des données que vous voulez obtenir des prédictions et la sortie sera les valeurs prédites ([tuto](https://www.r-bloggers.com/2021/01/how-to-share-your-machine-learning-models-with-shiny/)).
+
+```{r}
+# Enregistrer notre modèle final
+saveRDS(m_lr, "regressionModel.rds")
+```
+
+# Références
+[Atelier sur les modèles linéaires](http://r.qcbs.ca/workshop06/pres-fr/workshop06-pres-fr.html#121)
+
+[Régression linéaire multiple, sthda](http://www.sthda.com/english/articles/40-regression-analysis/168-multiple-linear-regression-in-r/)
+
+[Multicolinéarité des variables, sthda](http://www.sthda.com/english/articles/39-regression-model-diagnostics/160-multicollinearity-essentials-and-vif-in-r/)
+
+[Max Kuhn, “The caret Package”](http://topepo.github.io/caret/index.html)
+
+# Session info
+```{r}
+sessionInfo()
+```

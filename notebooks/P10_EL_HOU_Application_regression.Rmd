@@ -1,0 +1,97 @@
+---
+title: "FakekMoneyDetector"
+author: "Abdelmajid EL HOU"
+date: "02/02/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, echo=FALSE}
+# Définir le dossier de travail
+setwd("C:/Users/abdel/Desktop/Projet 10/P10_Abdelmajid_EL_HOU")
+```
+
+
+```{r, echo=FALSE}
+suppressMessages(require(tidyverse)) # pour la manipulation et la visualisation des données
+suppressMessages(require(DataExplorer))
+suppressMessages(require(e1071))
+suppressMessages(require(caret)) # regression logistique
+suppressMessages(require(caTools))
+#suppressMessages(require(InformationValue))
+suppressMessages(require(missMDA)) # offre des fonctions R facilitant l'imputation des données manquantes
+suppressMessages(require(ggplot2))
+suppressMessages(require(corrplot))
+suppressMessages(require(purrr))
+suppressMessages(require(hrbrthemes))
+suppressMessages(require(visdat))
+
+# tester la normalité & variances
+suppressMessages(require(ggpubr)) # pour créer facilement des graphiques prêts à la publication
+suppressMessages(require(rstatix)) # offre des fonctions R facilitant les analyses statistiques
+#suppressMessages(require(car)) # tests statistiques
+
+#clustering
+suppressMessages(require(FactoMineR))
+suppressMessages(require(FactoInvestigate))
+suppressMessages(require(factoextra))
+suppressMessages(require(cluster))
+suppressMessages(require(gridExtra))
+suppressMessages(require(DataExplorer))
+suppressMessages(require(knitr))
+```
+
+
+```{r, echo=FALSE}
+# importer le jeu de données
+new_df = read.csv("data/billets_test.csv", sep = ',')
+#new_df = read.csv("data/test2.csv", sep = ';')
+#new_df = read.csv("data/billets_essai.csv", sep = ',')
+```
+
+```{r, echo=FALSE}
+print(paste("Votre jeu de données est composé de",
+            nrow(new_df), "billets.", collapse = "\t"))
+```
+
+```{r, echo=FALSE}
+# importer le modèle
+#filename <- file.choose()
+ m_lr <- readRDS("regressionModel.rds")
+```
+
+```{r, echo=FALSE}
+# prediction 
+pred_new = predict(m_lr, newdata=new_df) 
+
+#distribution des classes prédites 
+count1 = table(pred_new)
+
+#score des individus positifs (vrai billets) 
+score = predict(m_lr, new_df, type="prob")[,"True"]
+
+# tableau de données pour le scoring 
+liftdata_new <- data.frame(classe=new_df$id) 
+liftdata_new$score <- score
+
+# Ajouter les prédictions au fichier original
+df4 = new_df %>% mutate(prediction = pred_new, Prob_vrai = score)
+
+# nombre de vrai / faux billets
+kable(count1, caption = 'nombre de vrai & faux billets :')
+```
+
+Les prédictions pour chaque billet dans votre jeu de données :
+```{r, echo=FALSE, results = 'asis'}
+kable(df4, caption = 'Mes résultats')
+```
+
+```{r, echo = FALSE}
+# sauvegarder les résultats
+write.table(df4, "Mes_resultats.txt", quote = FALSE, sep = "\t",row.names = FALSE, col.names = TRUE)
+```
+Vos résultats sont sauvegardés dans le fichier "**Mes_resultats.txt**".
+
