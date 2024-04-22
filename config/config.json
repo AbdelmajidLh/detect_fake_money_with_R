@@ -1,0 +1,6 @@
+{
+    "data_file_path": "data/billets.csv",
+    "log_file_path": "logs/logfile.log",
+    "output_folder_path": "res/",
+    "scripts_folder_path": "scripts/"
+}
